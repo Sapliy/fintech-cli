@@ -11,9 +11,10 @@ import (
 var cfgFile string
 
 var rootCmd = &cobra.Command{
-	Use:   "sapliy",
-	Short: "Sapliy CLI",
-	Long:  `Sapliy Command Line Interface for managing payments, wallets, and more.`,
+	Use:     "sapliy",
+	Short:   "Sapliy CLI",
+	Long:    `Sapliy Command Line Interface for managing payments, wallets, and more.`,
+	Version: "1.0.0",
 }
 
 func Execute() {
