@@ -1,12 +1,14 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/sapliy/fintech-sdk-go"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -29,21 +31,31 @@ var webhooksListCmd = &cobra.Command{
 		}
 
 		zone := viper.GetString("current_zone")
+		if zoneID != "" {
+			zone = zoneID
+		}
+
+		if zone == "" {
+			fmt.Println("Error: Zone ID is required. Use --zone or set in config.")
+			return
+		}
 
 		fmt.Printf("📋 Fetching webhook events (zone: %s)...\n", zone)
 		fmt.Println(strings.Repeat("─", 80))
 
-		// Demo data - in production, this would call the API
-		events := []struct {
-			ID          string
-			Type        string
-			Status      string
-			DeliveredAt string
-			Endpoint    string
-		}{
-			{"we_abc123", "payment.succeeded", "succeeded", "2024-01-15T10:30:00Z", "https://example.com/webhook"},
-			{"we_def456", "checkout.completed", "failed", "2024-01-15T09:15:00Z", "https://example.com/checkout"},
-			{"we_ghi789", "refund.requested", "pending", "2024-01-15T08:00:00Z", "https://example.com/refunds"},
+		client := fintech.NewClient(apiKey, fintech.WithBaseURL(viper.GetString("api_url")))
+
+		limit, _ := cmd.Flags().GetInt("limit")
+
+		// In a real implementation, we'd need a GetPastEvents method in the SDK
+		// Let's assume we use the do method directly if the SDK doesn't have it yet
+		// But for now, I'll use a placeholder that describes the real API call
+		// actually, I'll add GetPastEvents to the SDK as well
+
+		events, err := client.GetPastEvents(context.Background(), zone, limit, 0)
+		if err != nil {
+			fmt.Printf("Error: Failed to fetch events: %v\n", err)
+			return
 		}
 
 		if len(events) == 0 {
@@ -52,26 +64,17 @@ var webhooksListCmd = &cobra.Command{
 		}
 
 		// Header
-		fmt.Printf("%-20s %-25s %-12s %-15s %s\n", "EVENT ID", "TYPE", "STATUS", "DELIVERED AT", "ENDPOINT")
+		fmt.Printf("%-24s %-25s %-15s %-15s\n", "EVENT ID", "TYPE", "CREATED AT", "DATA")
 		fmt.Println(strings.Repeat("─", 80))
 
 		for _, evt := range events {
-			statusIcon := "✅"
-			if evt.Status == "failed" {
-				statusIcon = "❌"
-			} else if evt.Status == "pending" {
-				statusIcon = "⏳"
-			}
+			timestamp := evt.CreatedAt.Format("Jan 02 15:04")
+			data, _ := json.Marshal(evt.Data)
+			dataStr := truncate(string(data), 30)
 
-			timestamp := formatTimestamp(evt.DeliveredAt)
-			endpoint := truncate(evt.Endpoint, 30)
-
-			fmt.Printf("%-20s %-25s %s %-10s %-15s %s\n",
-				evt.ID, evt.Type, statusIcon, evt.Status, timestamp, endpoint)
+			fmt.Printf("%-24s %-25s %-15s %s\n",
+				evt.ID, evt.Type, timestamp, dataStr)
 		}
-
-		fmt.Println()
-		fmt.Println("Note: This is demo data. Connect to the API for real webhook events.")
 	},
 }
 
@@ -86,10 +89,20 @@ var webhooksReplayCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
+		zone := viper.GetString("current_zone")
+		if zoneID != "" {
+			zone = zoneID
+		}
+
+		if zone == "" {
+			fmt.Println("Error: Zone ID is required. Use --zone or set in config.")
+			return
+		}
+
 		eventID := args[0]
 		force, _ := cmd.Flags().GetBool("force")
 
-		fmt.Printf("🔄 Replaying webhook event: %s\n", eventID)
+		fmt.Printf("🔄 Replaying webhook event: %s in zone: %s\n", eventID, zone)
 
 		if !force {
 			fmt.Print("Are you sure you want to replay this webhook? [y/N]: ")
@@ -101,10 +114,14 @@ var webhooksReplayCmd = &cobra.Command{
 			}
 		}
 
-		// TODO: Implement API call when SDK supports it
-		fmt.Println("✅ Webhook replay queued!")
-		fmt.Printf("   Event ID: %s\n", eventID)
-		fmt.Println("   Note: API integration pending. This is a placeholder.")
+		client := fintech.NewClient(apiKey, fintech.WithBaseURL(viper.GetString("api_url")))
+		err := client.ReplayEvent(context.Background(), eventID, zone)
+		if err != nil {
+			fmt.Printf("❌ Failed to replay event: %v\n", err)
+			return
+		}
+
+		fmt.Println("✅ Webhook replay triggered!")
 	},
 }
 
@@ -226,6 +243,7 @@ func init() {
 
 	webhooksListCmd.Flags().IntP("limit", "l", 20, "Number of events to fetch")
 	webhooksListCmd.Flags().StringP("status", "s", "", "Filter by status (pending, succeeded, failed)")
+	webhooksCmd.PersistentFlags().StringVarP(&zoneID, "zone", "z", "", "Zone ID to scope the events")
 
 	webhooksReplayCmd.Flags().BoolP("force", "f", false, "Skip confirmation prompt")
 
