@@ -29,10 +29,11 @@ var createPaymentCmd = &cobra.Command{
 		currency, _ := cmd.Flags().GetString("currency")
 
 		client := fintech.NewClient(apiKey)
-		payment, err := client.Payments.Create(context.Background(), &fintech.CreateChargeRequest{
+		zone := viper.GetString("current_zone")
+		payment, err := client.Payments.CreateIntent(context.Background(), &fintech.PaymentIntentRequest{
 			Amount:   amount,
 			Currency: currency,
-			SourceID: "tok_visa",
+			ZoneID:   zone,
 		})
 
 		if err != nil {

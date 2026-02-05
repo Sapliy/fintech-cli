@@ -4,12 +4,12 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -23,8 +23,8 @@ Connect to the Sapliy event stream to monitor automation flows as they execute.`
 
 var debugListenCmd = &cobra.Command{
 	Use:   "listen",
-	Short: "Listen to real-time event stream via HTTP polling",
-	Long: `Connect to Sapliy API and poll for events in real-time.
+	Short: "Listen to real-time event stream via WebSocket",
+	Long: `Connect to Sapliy API and stream events in real-time.
 This is useful for debugging flows and watching events as they happen.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		apiKey := viper.GetString("api_key")
@@ -38,85 +38,101 @@ This is useful for debugging flows and watching events as they happen.`,
 			zone, _ = cmd.Flags().GetString("zone")
 		}
 
+		// Determine WS URL (default to localhost:8089 for dev)
 		apiURL := viper.GetString("api_url")
-		if apiURL == "" {
-			apiURL = "https://api.sapliy.io"
+		wsURL := "ws://localhost:8089/v1/events/stream"
+		if apiURL != "" && !strings.Contains(apiURL, "localhost") {
+			// Production logic would replace https:// with wss://
+			wsURL = strings.Replace(apiURL, "https://", "wss://", 1) + "/v1/events/stream"
+		}
+
+		// Append query params
+		wsURL += fmt.Sprintf("?api_key=%s", apiKey)
+		if zone != "" {
+			wsURL += fmt.Sprintf("&zone=%s", zone)
 		}
 
 		verbose, _ := cmd.Flags().GetBool("verbose")
 		filterType, _ := cmd.Flags().GetString("filter")
 
-		fmt.Printf("🔌 Connecting to %s...\n", apiURL)
-		fmt.Println("✅ Connected! Polling for events... (Ctrl+C to stop)")
+		fmt.Printf("🔌 Connecting to %s...\n", wsURL)
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			fmt.Printf("❌ Failed to connect: %v\n", err)
+			return
+		}
+		defer conn.Close()
+
+		fmt.Println("✅ Connected! Streaming events... (Ctrl+C to stop)")
 		fmt.Println(strings.Repeat("─", 60))
 
 		// Handle graceful shutdown
 		interrupt := make(chan os.Signal, 1)
 		signal.Notify(interrupt, os.Interrupt)
 
-		client := &http.Client{Timeout: 30 * time.Second}
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
+		done := make(chan struct{})
 
-		var lastEventID string
-
-		for {
-			select {
-			case <-interrupt:
-				fmt.Println("\n👋 Disconnecting...")
-				return
-			case <-ticker.C:
-				events := pollEvents(client, apiURL, apiKey, zone, lastEventID)
-				for _, event := range events {
-					eventType, _ := event["type"].(string)
-					eventID, _ := event["id"].(string)
-
-					// Apply filter if specified
-					if filterType != "" && !strings.Contains(eventType, filterType) {
-						continue
+		go func() {
+			defer close(done)
+			for {
+				_, message, err := conn.ReadMessage()
+				if err != nil {
+					// Check if normal close
+					if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+						fmt.Printf("❌ connection error: %v\n", err)
 					}
+					return
+				}
 
-					lastEventID = eventID
-					timestamp := time.Now().Format("15:04:05")
+				var event map[string]interface{}
+				if err := json.Unmarshal(message, &event); err != nil {
+					continue
+				}
 
-					if verbose {
-						prettyJSON, _ := json.MarshalIndent(event, "", "  ")
-						fmt.Printf("[%s] %s\n%s\n\n", timestamp, eventType, string(prettyJSON))
-					} else {
-						fmt.Printf("[%s] %-30s  %s\n", timestamp, eventType, eventID)
+				eventType, _ := event["type"].(string)
+
+				// Apply filter if specified
+				if filterType != "" && !strings.Contains(eventType, filterType) {
+					continue
+				}
+
+				timestamp := time.Now().Format("15:04:05")
+
+				if verbose {
+					prettyJSON, _ := json.MarshalIndent(event, "", "  ")
+					fmt.Printf("[%s] %s\n%s\n\n", timestamp, eventType, string(prettyJSON))
+				} else {
+					// Try to get ID if available
+					id := ""
+					if data, ok := event["data"].(map[string]interface{}); ok {
+						if val, ok := data["id"].(string); ok {
+							id = val
+						}
 					}
+					fmt.Printf("[%s] %-30s  %s\n", timestamp, eventType, id)
 				}
 			}
+		}()
+
+		select {
+		case <-interrupt:
+			fmt.Println("\n👋 Disconnecting...")
+			err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+			if err != nil {
+				return
+			}
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+			}
+		case <-done:
+			fmt.Println("Server closed connection")
 		}
 	},
 }
 
 // pollEvents fetches events from the API
-func pollEvents(client *http.Client, baseURL, apiKey, zone, afterID string) []map[string]interface{} {
-	url := fmt.Sprintf("%s/v1/events?limit=10", baseURL)
-	if zone != "" {
-		url += "&zone=" + zone
-	}
-	if afterID != "" {
-		url += "&after=" + afterID
-	}
-
-	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		Data []map[string]interface{} `json:"data"`
-	}
-	json.NewDecoder(resp.Body).Decode(&result)
-	return result.Data
-}
 
 var debugInspectCmd = &cobra.Command{
 	Use:   "inspect [flow_id]",
