@@ -43,6 +43,7 @@ func initConfig() {
 		viper.SetConfigName(".sapliy")
 	}
 
+	viper.SetEnvPrefix("SAPLIY")
 	viper.AutomaticEnv()
 	viper.ReadInConfig()
 }
