@@ -10,13 +10,15 @@ import (
 
 var cfgFile string
 
+// rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:     "sapliy",
-	Short:   "Sapliy CLI",
-	Long:    `Sapliy Command Line Interface for managing payments, wallets, and more.`,
-	Version: "1.0.0",
+	Use:   "sapliy",
+	Short: "Sapliy Fintech Ecosystem CLI",
+	Long: `Sapliy CLI is the official command line interface for the Sapliy Fintech Ecosystem.
+It allows you to manage automation zones, flows, and interact with the event bus.`,
 }
 
+// Execute adds all child commands to the root command and sets flags appropriately.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
@@ -26,9 +28,14 @@ func Execute() {
 
 func init() {
 	cobra.OnInitialize(initConfig)
+
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.sapliy.yaml)")
+	rootCmd.PersistentFlags().Bool("verbose", false, "enable verbose output")
+
+	viper.BindPFlag("verbose", rootCmd.PersistentFlags().Lookup("verbose"))
 }
 
+// initConfig reads in config file and ENV variables if set.
 func initConfig() {
 	if cfgFile != "" {
 		viper.SetConfigFile(cfgFile)
@@ -40,11 +47,15 @@ func initConfig() {
 		}
 
 		viper.AddConfigPath(home)
-		viper.SetConfigType("yaml")
 		viper.SetConfigName(".sapliy")
 	}
 
 	viper.SetEnvPrefix("SAPLIY")
 	viper.AutomaticEnv()
-	viper.ReadInConfig()
+
+	if err := viper.ReadInConfig(); err == nil {
+		if viper.GetBool("verbose") {
+			fmt.Println("Using config file:", viper.ConfigFileUsed())
+		}
+	}
 }
